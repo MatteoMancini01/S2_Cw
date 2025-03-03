@@ -1,0 +1,6 @@
+numpy
+matplotlib
+iminuit
+joblib
+pandas
+scipy
