@@ -118,7 +118,14 @@ def rad_tang_model(sections_ids, hole_ids, x_obs = None, y_obs = None):
     )
 
     with numpyro.plate('data', len(hole_ids)):
-        numpyro.sample('obs', dist.MultivariateNormal(loc=jnp.vstack((x_pred, y_pred)).T, covariance_matrix=Sigma), obs = jnp.vstack((x_obs, y_obs)).T)
+        obs_data = None
+        if x_obs is not None and y_obs is not None:
+            obs_data = jnp.vstack((x_obs, y_obs)).T
+
+        numpyro.sample('obs', dist.MultivariateNormal(
+            loc=jnp.vstack((x_pred, y_pred)).T,
+            covariance_matrix=Sigma
+        ), obs=obs_data)
 
 
 
@@ -231,7 +238,14 @@ def isotropic_model(sections_ids, hole_ids, x_obs = None, y_obs = None):
     Sigma = jnp.array([jnp.array([[sigma**2, 0],[0, sigma**2]]) for _ in phase])
 
     with numpyro.plate('data', len(hole_ids)):
-        numpyro.sample('obs', dist.MultivariateNormal(loc=jnp.vstack((x_pred, y_pred)).T, covariance_matrix=Sigma), obs = jnp.vstack((x_obs, y_obs)).T)
+        obs_data = None
+        if x_obs is not None and y_obs is not None:
+            obs_data = jnp.vstack((x_obs, y_obs)).T
+
+        numpyro.sample('obs', dist.MultivariateNormal(
+            loc=jnp.vstack((x_pred, y_pred)).T,
+            covariance_matrix=Sigma
+        ), obs=obs_data)
 
 
 def hole_prediction(N, R, optim_parm, sec_mod):

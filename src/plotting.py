@@ -1,5 +1,7 @@
 import matplotlib.pyplot as plt
-import pandas as pd
+import numpy as np
+import corner
+import seaborn as sns
 
 def plotting_comparison(observed_holes, predicted_holes, text_model):
 
@@ -147,4 +149,151 @@ def visualise_data(df_data):
     plt.grid()
 
     # Show plot
+    plt.show()
+
+
+def corner_plots(posterior_for_isotropic, posterior_for_rad_tang):
+
+    """
+    Generates corner plots for posterior distributions of both the 
+    isotropic and radial-tangential models.
+
+    Parameters
+    ----------
+    posterior_for_isotropic : dict
+        Posterior samples for the isotropic model.
+    
+    posterior_for_rad_tang : dict
+        Posterior samples for the radial-tangential model.
+
+    Returns
+    -------
+    None
+        Displays corner plots comparing parameter distributions for both models.
+
+    Example
+    -------
+    >>> corner_plots(posterior_samples_iso, posterior_samples_rt)
+    """
+
+    # Select the parameters to plot
+    params_rt = ["N", "r", "sigma_r", "sigma_t"] 
+    params_is = ["N", "r", "sigma"]
+
+    # Convert posterior samples to a NumPy array for plotting
+    samples_array_rt = np.column_stack([posterior_for_rad_tang[param] for param in params_rt])
+    samples_array_is = np.column_stack([posterior_for_isotropic[param] for param in params_is])
+
+    # Create a corner plot for the Radial-Tangential model
+    figure_rt = corner.corner(samples_array_rt, 
+                              labels=[r"$N$", r"$r$", r"$\sigma_r$", r"$\sigma_t$"], 
+                              quantiles=[0.15, 0.5, 0.85],  
+                              show_titles=True, 
+                              title_kwargs={"fontsize": 14}, 
+                              label_kwargs={"fontsize": 14}, 
+                              bins=30, 
+                              smooth=1)
+    
+    # Add a title
+    plt.suptitle("Corner Plot for Radial-Tangential Model", fontsize=16, y=1.05)
+
+    # Show the first plot
+    plt.show()
+
+    # Create a corner plot for the Isotropic model
+    figure_is = corner.corner(samples_array_is, 
+                              labels=[r"$N$", r"$r$", r"$\sigma$"], 
+                              quantiles=[0.15, 0.5, 0.85],  
+                              show_titles=True, 
+                              title_kwargs={"fontsize": 14}, 
+                              label_kwargs={"fontsize": 14}, 
+                              bins=30, 
+                              smooth=1)
+
+    # Add a title
+    plt.suptitle("Corner Plot for Isotropic Model", fontsize=16, y=1.05)
+
+    # Show the second plot
+    plt.show()
+
+
+def joint_plot_sns(predictive_posteriror, hole_index, Data, title_ajustment):
+
+    """
+    Creates a 2D joint plot showing the posterior predictive distribution of a single hole 
+    using seaborn's scatter and KDE contours.
+
+    The plot includes:
+    - Blue scatter of predicted positions from the posterior predictive distribution
+    - KDE contour lines to represent density
+    - Red dot for the observed hole position
+    - Red 'x' for the predictive mean
+
+    Parameters
+    ----------
+    predictive_posteriror : ndarray (num_samples, num_holes, 2)
+        Posterior predictive samples of hole positions. Typically obtained from Predictive(...).
+    
+    hole_index : int
+        The index of the hole to visualize.
+
+    Data : pandas.DataFrame
+        DataFrame containing observed x and y coordinates of the holes. Must include 'Mean(X)' and 'Mean(Y)'.
+
+    title_ajustment : str
+        A string indicating the model used (e.g., 'Radial-Tangential Model'), shown in the plot title.
+
+    Returns
+    -------
+    None
+        Displays the joint plot with KDE contours and annotations.
+
+    Example
+    -------
+    >>> joint_plot_sns(posterior_predictive_samples_rt['obs'], hole_index=69, Data=sub_data, title_ajustment='Radial-Tangential Model')
+    """
+
+    x_obs = Data['Mean(X)'].to_numpy()
+    y_obs = Data['Mean(Y)'].to_numpy()
+
+    x_prediction = predictive_posteriror[:, hole_index, 0]
+    y_prediction = predictive_posteriror[:, hole_index, 1]
+
+    # Create the jointplot object
+    g = sns.jointplot(
+        x=x_prediction, 
+        y=y_prediction, 
+        kind='scatter', 
+        s=10, 
+        marginal_kws=dict(bins=60, fill=True), 
+        color='blue', 
+        alpha=0.6
+    )
+
+    # Add KDE contours
+    sns.kdeplot(
+        x=x_prediction, 
+        y=y_prediction, 
+        ax=g.ax_joint, 
+        color='black', 
+        alpha=0.3
+    )
+
+    # Add observed hole location, and predicted mean
+
+    plt.scatter(x_obs[hole_index], y_obs[hole_index], color = 'red', s = 20, label = f"Hole {hole_index} Location")
+    plt.scatter(x_prediction.mean(), y_prediction.mean(), color = "red", marker = 'x', label = f"Hole {hole_index} Predictive Mean")
+
+    # Set axis labels
+    g.set_axis_labels("X", "Y")
+
+    # Add title to the whole figure, not the joint axes
+    g.figure.suptitle(f"Posterior Predictive Distribution of Hole {hole_index} ({title_ajustment})", fontsize=14)
+
+    # Adjust spacing so the title doesn't overlap
+    g.figure.tight_layout()
+    g.figure.subplots_adjust(top=0.95)  # push plot down to make space for title
+
+    plt.legend()
+
     plt.show()
