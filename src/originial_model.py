@@ -155,3 +155,73 @@ def log_likelihood_isotropic(params, data, N):
 
     return prefact + exp_likelihood
 
+
+
+n_sec = 6 # number of sections
+n_dim = 3+3*n_sec
+
+# Define prior transform for 
+
+# Radial-Tangential Model
+
+def prior_transform_rt(u):
+    """
+    Transforms a point u in the unit cube [0,1]^d to the physical parameter space,
+    matching the priors used in the radial-tangential model.
+
+    Parameters:
+        u (array-like): A 1D array of shape (ndim,) with values in [0, 1].
+
+    Returns:
+        theta (np.ndarray): Transformed parameters in the model's physical space.
+    """
+    
+    ndim = n_dim
+    theta = np.zeros(ndim)
+
+    # Global parameters
+    theta[0] = 65 + 20 * u[0]                    # R in [65, 85]
+    theta[1] = 10**(-3 + 3 * u[1])               # sigma_r in [1e-3, 1] (log-uniform)
+    theta[2] = 10**(-3 + 3 * u[2])               # sigma_t in [1e-3, 1] (log-uniform)
+
+    # Section-wise parameters (phases, x-centres, y-centres)
+    start = 3
+    theta[start:start+n_sec] = -4 + 3 * u[start:start+n_sec]              # phase in [-4, -1]
+    theta[start+n_sec:start+2*n_sec] = 70 + 20 * u[start+n_sec:start+2*n_sec]   # x_centre in [70, 90]
+    theta[start+2*n_sec:start+3*n_sec] = 125 + 20 * u[start+2*n_sec:start+3*n_sec] # y_centre in [125, 145]
+
+    return theta
+
+# Isotropic Model
+
+n_sec = 6 # number of sections
+n_dim_iso = 2+3*n_sec
+
+def prior_transform_isotropic(u):
+    """
+    Transforms a unit cube sample to physical parameter space for the isotropic model.
+
+    Parameters:
+        u (array-like): 1D array of shape (20,), values in [0, 1]
+
+    Returns:
+        theta (np.ndarray): Transformed parameters (20D)
+    """
+    
+    ndim = 2 + 3 * n_sec
+    theta = np.zeros(ndim)
+
+    # Global parameters
+    theta[0] = 65 + 20 * u[0]           # R in [65, 85]
+    theta[1] = 10**(-3 + 1.5 * u[1])      # sigma in [1e-3, 1] (log-uniform)
+
+    # Section-wise parameters
+    start = 2
+    theta[start:start+n_sec] = -4 + 3*u[start:start+n_sec]               # phase in [-4, -1]
+    theta[start+n_sec:start+2*n_sec] = 70 + 20*u[start+n_sec:start+2*n_sec]     # x_centre
+    theta[start+2*n_sec:start+3*n_sec] = 125 + 20*u[start+2*n_sec:start+3*n_sec] # y_centre
+
+    return theta
+
+def loglike_iso(theta):
+    return log_likelihood_isotropic(theta, data_for_NS, int(N_is_pred))
