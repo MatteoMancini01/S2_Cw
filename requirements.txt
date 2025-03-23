@@ -8,3 +8,4 @@ numpyro
 jax
 corner
 seaborn
+dynesty
