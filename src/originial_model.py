@@ -223,5 +223,3 @@ def prior_transform_isotropic(u):
 
     return theta
 
-def loglike_iso(theta):
-    return log_likelihood_isotropic(theta, data_for_NS, int(N_is_pred))
