@@ -213,7 +213,7 @@ def prior_transform_isotropic(u):
 
     # Global parameters
     theta[0] = 65 + 20 * u[0]           # R in [65, 85]
-    theta[1] = 10**(-3 + 1.5 * u[1])      # sigma in [1e-3, 1] (log-uniform)
+    theta[1] = 10**(-3 + 3 * u[1])      # sigma in [1e-3, 1] (log-uniform)
 
     # Section-wise parameters
     start = 2
@@ -222,4 +222,159 @@ def prior_transform_isotropic(u):
     theta[start+2*n_sec:start+3*n_sec] = 125 + 20*u[start+2*n_sec:start+3*n_sec] # y_centre
 
     return theta
+
+def log_likelihood_rt_cartesian_np(theta, data, N, sections_ids, hole_ids):
+
+    """
+    Computes the log-likelihood for the radial-tangential Gaussian error model using NumPy.
+
+    This function assumes that each section of the Antikythera mechanism's calendar ring
+    may be translated and rotated independently, and that positional errors are anisotropic
+    (different standard deviations in radial and tangential directions).
+
+    Parameters
+    ----------
+    theta : np.ndarray
+        Parameter vector of length 21:
+        - theta[0]   : Radius `R`
+        - theta[1]   : Radial error standard deviation `sigma_r`
+        - theta[2]   : Tangential error standard deviation `sigma_t`
+        - theta[3:9] : Phase shifts `alpha_pred` for each section
+        - theta[9:15]: x-centers `x_centre` for each section
+        - theta[15:21]: y-centers `y_centre` for each section
+
+    data : list of tuples
+        Observed hole data for each section, where each element is (x_obs, y_obs),
+        both np.ndarrays of equal length.
+
+    N : int
+        Hypothesized total number of holes in the full ring.
+
+    sections_ids : np.ndarray
+        Array mapping each observed hole to its corresponding section ID (0-based).
+
+    hole_ids : np.ndarray
+        Array of 1-based indices representing the position of each hole on the full ring.
+
+    Returns
+    -------
+    float
+        The total log-likelihood under the radial-tangential model with anisotropic noise.
+
+    Notes
+    -----
+    - The function uses NumPy instead of JAX.
+    - Assumes six sections in the ring with fixed parameter slicing.
+    - Suitable for use in nested sampling or optimization.
+    """
+    R, sigma_r, sigma_t = theta[:3]
+    phases, x_cents, y_cents = np.split(theta[3:], 3)
+
+    inv_sig_r2 = 1.0/(sigma_r ** 2)
+    inv_sig_t2 = 1.0/(sigma_t ** 2)
+
+    loglike = 0.0
+    npoints = 0
+
+    for j, (x_obs, y_obs) in enumerate(data):
+        n = len(x_obs)
+
+        section_indices = (sections_ids == j)
+        local_hole_ids = hole_ids[section_indices]
+
+        phis = 2*np.pi*(local_hole_ids - 1)/N + phases[j]
+
+        x_model = R*np.cos(phis) + x_cents[j]
+        y_model = R*np.sin(phis) + y_cents[j]
+
+        dx = x_obs - x_model
+        dy = y_obs - y_model
+
+        cphi = np.cos(phis)
+        sphi = np.sin(phis)
+        rp = dx*cphi + dy*sphi
+        tp = dx*sphi - dy*cphi
+
+        log_probs = -0.5*(rp**2*inv_sig_r2 + tp**2*inv_sig_t2)
+        loglike += np.sum(log_probs)
+        npoints += n
+
+    norm = -npoints*np.log(2*np.pi*sigma_r*sigma_t)
+    return norm + loglike
+
+
+def log_likelihood_isotropic_cartesian_np(theta, data, N, sections_ids, hole_ids):
+
+    """
+    Computes the log-likelihood for the isotropic Gaussian error model using NumPy.
+
+    This function models the observed hole positions as noisy measurements of an
+    idealized circular ring with evenly spaced holes. Each section is translated
+    and rotated independently. Measurement errors are assumed to be isotropic—
+    i.e., having the same standard deviation in all directions.
+
+    Parameters
+    ----------
+    theta : np.ndarray
+        Parameter vector of length 20:
+        - theta[0]   : Radius `R`
+        - theta[1]   : Isotropic error standard deviation `sigma`
+        - theta[2:8] : Phase shifts `alpha_pred` for each section
+        - theta[8:14]: x-centers `x_centre` for each section
+        - theta[14:20]: y-centers `y_centre` for each section
+
+    data : list of tuples
+        Observed hole data for each section, where each element is (x_obs, y_obs),
+        both np.ndarrays of equal length.
+
+    N : int
+        Hypothesized total number of holes in the full ring.
+
+    sections_ids : np.ndarray
+        Array mapping each observed hole to its corresponding section ID (0-based).
+
+    hole_ids : np.ndarray
+        Array of 1-based indices representing the position of each hole on the full ring.
+
+    Returns
+    -------
+    float
+        The total log-likelihood under the isotropic error model.
+
+    Notes
+    -----
+    - This version omits the normalization term in the likelihood by default.
+    - Based on a simplified model where errors are directionally symmetric.
+    - Useful for comparison with the more flexible radial-tangential model.
+    """
+
+
+    R, sigma = theta[:2]
+    phases, x_cents, y_cents = np.split(theta[2:], 3)
+
+    inv_sig2 = 1.0/(sigma ** 2)
+
+    total_loglike = 0.0
+    npoints = 0
+
+    for j, (x_obs, y_obs) in enumerate(data):
+        n = len(x_obs)
+
+        section_indices = (sections_ids == j)
+        local_hole_ids = hole_ids[section_indices]
+
+        phis = 2*np.pi*(local_hole_ids - 1)/N + phases[j]
+
+        x_model = R*np.cos(phis) + x_cents[j]
+        y_model = R*np.sin(phis) + y_cents[j]
+
+        dx = x_obs - x_model
+        dy = y_obs - y_model
+
+        log_probs = -0.5*(dx**2 + dy**2)*inv_sig2
+        total_loglike += np.sum(log_probs)
+        npoints += n
+
+    norm = -npoints*np.log(2*np.pi*sigma**2)
+    return norm + total_loglike
 

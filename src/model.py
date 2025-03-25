@@ -2,7 +2,7 @@ import numpy as np
 import numpyro
 import jax.numpy as jnp
 import numpyro.distributions as dist
-
+from numpyro import handlers
 
 
 
@@ -246,31 +246,60 @@ def isotropic_model(sections_ids, hole_ids, x_obs = None, y_obs = None):
             loc=jnp.vstack((x_pred, y_pred)).T,
             covariance_matrix=Sigma
         ), obs=obs_data)
+    
+
 
 
 def hole_prediction(N, R, optim_parm, sec_mod):
 
-    '''  
-    Function to compute prediction of hole location on the xy-plane.
+    """
+    Predicts the x and y coordinates of hole positions on the calendar ring 
+    of the Antikythera mechanism, based on a circular model with section-specific 
+    transformations.
 
-    Parameters:
+    This function computes the expected Cartesian coordinates of each hole 
+    assuming they are evenly spaced along a circle of radius R with N total holes. 
+    Each section of the fractured ring is allowed its own translation and rotation 
+    (phase shift), as provided in `optim_parm`.
+
+    Parameters
+    ----------
+    N : int
+        Total number of holes hypothesized in the original complete ring.
     
-    N : Int
-        Number of predicted holes
-    
-    R : Int
-        Predicted radius of the original circle
+    R : float
+        Estimated radius of the ring.
 
-    optim_parm : 
-        Predicted parameters (x_0j, y_0j, alpha_j)
+    optim_parm : tuple of arrays
+        Tuple containing three 1D arrays representing the optimized transformation 
+        parameters for each section:
+        - optim_parm[0] : array of angular phase shifts (alpha_j) for each section.
+        - optim_parm[1] : array of x-translation centers (x_0j) for each section.
+        - optim_parm[2] : array of y-translation centers (y_0j) for each section.
 
-    sec_mod : 
-        Model's sections (0,1,2,3,4,5)
+    sec_mod : array-like
+        An array mapping each hole index to a section ID (0-based). Should be of 
+        length equal to the number of measured holes (typically 79).
 
-    Returns:
-        np.array([x_pred, y_pred]), array of predicted x and y values.
+    Returns
+    -------
+    jnp.ndarray
+        A 2D array of shape (2, num_holes), where the first row contains the 
+        predicted x-coordinates and the second row contains the predicted y-coordinates 
+        of the holes.
 
-    '''
+    Notes
+    -----
+    - The function assumes 79 measured holes in total.
+    - Hole angular positions are derived from a uniform angular spacing around the ring,
+      offset by the section-specific phase shift.
+    - Requires JAX for numerical operations (uses `jnp`).
+
+    Example
+    -------
+    >>> xypred = hole_prediction(N=355, R=77.3, optim_parm=(alpha_j, x0_j, y0_j), sec_mod=section_map)
+    >>> x_pred, y_pred = xypred[0], xypred[1]
+    """
 
     x_pred = [] # x_ij
     y_pred = [] # y_ij
@@ -287,3 +316,326 @@ def hole_prediction(N, R, optim_parm, sec_mod):
         y_pred.append(y_val)
     
     return jnp.array([x_pred, y_pred])
+
+
+
+def log_likelihood_rt_cartesian_jax(theta, data, N, sections_ids, hole_ids):
+
+    """
+    Compute the log-likelihood of the radial-tangential Gaussian error model for the
+    Antikythera mechanism's calendar ring in Cartesian coordinates using JAX.
+
+    This function calculates the log-likelihood assuming hole positions were originally
+    arranged uniformly around a circle and that each fractured section may be translated
+    and rotated. Errors in the observed positions are modeled with anisotropic Gaussian
+    noise, separated into radial and tangential components.
+
+    Parameters
+    ----------
+    theta : jnp.ndarray
+        Parameter vector including [R, sigma_r, sigma_t, phases..., x_centers..., y_centers...]
+        in that order. Used to compute the model predictions for each section.
+    data : list of tuples
+        Each element corresponds to a section, containing (x_obs, y_obs) arrays of observed
+        positions for the holes in that section.
+    N : int
+        Hypothesized total number of holes in the original full ring (not just the observed ones).
+    sections_ids : jnp.ndarray
+        Array of section indices corresponding to each hole in the dataset.
+    hole_ids : jnp.ndarray
+        Array of hole indices (1-based) corresponding to each hole in the dataset.
+
+    Returns
+    -------
+    float
+        The total log-likelihood value computed under the radial-tangential Gaussian model.
+
+    Notes
+    -----
+    - Uses JAX for automatic differentiation and vectorization.
+    - Each hole's error is projected into radial and tangential directions for likelihood computation.
+    - Assumes independent Gaussian errors for each direction with different variances.
+    """
+
+
+    R, sigma_r, sigma_t = theta[:3]
+    phases, x_cents, y_cents = jnp.split(theta[3:], 3)
+
+    inv_sig_r2 = 1.0/(sigma_r**2)
+    inv_sig_t2 = 1.0/(sigma_t**2)
+
+    loglike = 0.0
+    npoints = 0
+
+    for j in range(len(data)):
+        x_obs, y_obs = data[j]
+        n = len(x_obs)
+
+        section_indices = (sections_ids == j)
+        local_hole_ids = hole_ids[section_indices]
+
+        phis = 2*jnp.pi*(local_hole_ids - 1)/N + phases[j]
+
+        x_model = R*jnp.cos(phis) + x_cents[j]
+        y_model = R*jnp.sin(phis) + y_cents[j]
+
+        dx = x_obs - x_model
+        dy = y_obs - y_model
+
+        cphi = jnp.cos(phis)
+        sphi = jnp.sin(phis)
+        rp = dx*cphi + dy*sphi
+        tp = dx*sphi - dy*cphi
+
+        log_probs = -0.5*(rp**2*inv_sig_r2 + tp**2*inv_sig_t2)
+        loglike += jnp.sum(log_probs)
+        npoints += n
+
+    norm = -npoints*jnp.log(2*jnp.pi*sigma_r*sigma_t)
+    return norm + loglike
+
+
+def log_likelihood_isotropic_cartesian_jax(theta, data, N, sections_ids, hole_ids):
+    """
+    Compute the log-likelihood of the isotropic Gaussian error model for the
+    Antikythera mechanism's calendar ring in Cartesian coordinates using JAX.
+
+    This function assumes holes were originally evenly spaced on a circle and
+    accounts for section-specific translations and rotations. Positional errors
+    are modeled as isotropic Gaussian noise (same standard deviation in both
+    x and y directions). 
+
+    Parameters
+    ----------
+    theta : jnp.ndarray
+        Model parameters, ordered as:
+        [R, sigma, phases..., x_centers..., y_centers...]
+        - R: radius of the original ring
+        - sigma: standard deviation of isotropic Gaussian noise
+        - phases: angular misalignment per section
+        - x_centers, y_centers: section-wise translation offsets
+    data : list of tuples
+        Observed hole positions for each section. Each tuple contains:
+        (x_obs, y_obs): arrays of measured x and y coordinates.
+    N : int
+        Hypothesized total number of holes in the complete original ring.
+    sections_ids : jnp.ndarray
+        Array indicating which section each hole belongs to.
+    hole_ids : jnp.ndarray
+        Array of hole indices (1-based) corresponding to each hole in the dataset.
+
+    Returns
+    -------
+    float
+        Total log-likelihood under the isotropic Gaussian model. This value
+        is suitable for optimisation or sampling-based inference.
+
+    Notes
+    -----
+    - Uses JAX for efficient computation and automatic differentiation.
+    - Assumes isotropic Gaussian noise (equal in radial and tangential directions).
+    - Section-specific translations and rotations are modeled explicitly.
+    """
+
+    R, sigma = theta[:2]
+    phases, x_cents, y_cents = jnp.split(theta[2:], 3)
+
+    inv_sig2 = 1.0/(sigma**2)
+
+    total_loglike = 0.0
+    npoints = 0
+
+    for j in range(len(data)):
+        x_obs, y_obs = data[j]
+        n = len(x_obs)
+
+        section_indices = (sections_ids == j)
+        local_hole_ids = hole_ids[section_indices]
+
+        phis = 2 * jnp.pi * (local_hole_ids - 1) / N + phases[j]
+
+        x_model = R * jnp.cos(phis) + x_cents[j]
+        y_model = R * jnp.sin(phis) + y_cents[j]
+
+        dx = x_obs - x_model
+        dy = y_obs - y_model
+
+        log_probs = -0.5 * (dx**2 + dy**2) * inv_sig2
+        total_loglike += jnp.sum(log_probs)
+        npoints += n
+
+    norm = -npoints * jnp.log(2 * jnp.pi * sigma**2)
+    return norm + total_loglike
+
+
+def unpack_and_loglike_rt(theta, sections_ids, hole_ids, x_obs, y_obs):
+
+    """
+    Unpacks a flat parameter vector for the radial-tangential model and computes
+    the log-likelihood of observed hole positions using NumPyro's tracing and 
+    substitution tools.
+
+    This function is designed to evaluate the log-likelihood of a specific parameter
+    configuration (`theta`) for the radial-tangential error model of the Antikythera
+    calendar ring. The parameters are assumed to follow a fixed structure, and the
+    number of holes in the complete ring (N) is fixed to 354.0.
+
+    Parameters
+    ----------
+    theta : array-like (length 21)
+        Flattened vector of model parameters with the following structure:
+        - theta[0]   : Radius `r` of the ring
+        - theta[1]   : Radial standard deviation `sigma_r`
+        - theta[2]   : Tangential standard deviation `sigma_t`
+        - theta[3:9] : Angular offsets `alpha_pred` for each of 6 sections
+        - theta[9:15]: x-centers `x_centre` for each section
+        - theta[15:21]: y-centers `y_centre` for each section
+
+    sections_ids : jnp.ndarray
+        Section index for each observed hole, used to map holes to their corresponding
+        transformation parameters.
+
+    hole_ids : jnp.ndarray
+        Hole indices (1-based) used to compute angular positions for model predictions.
+
+    x_obs : jnp.ndarray
+        Observed x-coordinates of hole positions.
+
+    y_obs : jnp.ndarray
+        Observed y-coordinates of hole positions.
+
+    Returns
+    -------
+    float
+        The total log-likelihood of the observed data under the specified parameters,
+        based on the radial-tangential model using NumPyro.
+
+    Notes
+    -----
+    - The model uses `N = 354` holes as a fixed assumption.
+    - Utilises `numpyro.handlers.seed`, `substitute`, and `trace` to evaluate the 
+      likelihood under a custom parameter setting.
+    - Make sure that `rad_tang_model` is compatible with deterministic substitution.
+
+    Example
+    -------
+    >>> theta = np.random.rand(21)
+    >>> loglike = unpack_and_loglike_rt(theta, sections_ids, hole_ids, x_obs, y_obs)
+    """
+
+
+    # Unpack flat theta vector of length 21
+    r = theta[0]
+    sigma_r = theta[1]
+    sigma_t = theta[2]
+    alpha_pred = theta[3:9]
+    x_centre = theta[9:15]
+    y_centre = theta[15:21]
+
+    # Set fixed N (or include in theta[21] if sampling it)
+    N = 354.0
+
+    # Create parameter dictionary
+    params = {
+        'N': N,
+        'r': r,
+        'sigma_r': sigma_r,
+        'sigma_t': sigma_t,
+        'alpha_pred': alpha_pred,
+        'x_centre': x_centre,
+        'y_centre': y_centre,
+    }
+
+    # Seeded and substituted model
+    seeded_model = handlers.seed(rad_tang_model, rng_seed=0)
+    sub_model = handlers.substitute(seeded_model, params)
+
+    # Trace to extract log-likelihood
+    trace = handlers.trace(sub_model).get_trace(sections_ids, hole_ids, x_obs=x_obs, y_obs=y_obs)
+    loglike = trace["obs"]["fn"].log_prob(trace["obs"]["value"]).sum()
+
+    return loglike
+
+
+
+def unpack_and_loglike_is(theta, sections_ids, hole_ids, x_obs, y_obs):
+
+    """
+    Unpacks a flat parameter vector for the isotropic Gaussian error model and computes
+    the log-likelihood of observed hole positions using NumPyro's tracing and substitution
+    utilities.
+
+    This function evaluates the likelihood of the observed hole data under a fixed set 
+    of model parameters specified by a 1D array `theta`. The parameters define an isotropic 
+    model where positional uncertainties are the same in both radial and tangential directions.
+    The number of holes in the complete calendar ring is assumed to be fixed at N = 354.
+
+    Parameters
+    ----------
+    theta : array-like (length 20)
+        Flattened array of model parameters, in the following order:
+        - theta[0]   : Radius `r` of the ring
+        - theta[1]   : Isotropic standard deviation `sigma`
+        - theta[2:8] : Angular offsets `alpha_pred` for each of the 6 sections
+        - theta[8:14]: x-translation centers `x_centre` for each section
+        - theta[14:20]: y-translation centers `y_centre` for each section
+
+    sections_ids : jnp.ndarray
+        Array of section indices for each observed hole, mapping holes to their corresponding
+        ring fragment.
+
+    hole_ids : jnp.ndarray
+        Array of 1-based hole indices used to determine angular positions around the ring.
+
+    x_obs : jnp.ndarray
+        Observed x-coordinates of the hole positions.
+
+    y_obs : jnp.ndarray
+        Observed y-coordinates of the hole positions.
+
+    Returns
+    -------
+    float
+        The total log-likelihood of the observed data under the isotropic Gaussian model,
+        computed using NumPyro's trace mechanism.
+
+    Notes
+    -----
+    - The number of holes in the complete ring is fixed at N = 354.
+    - Uses deterministic parameter substitution with `numpyro.handlers.substitute`.
+
+    Example
+    -------
+    >>> theta = np.random.rand(20)
+    >>> loglike = unpack_and_loglike_is(theta, sections_ids, hole_ids, x_obs, y_obs)
+    """
+
+    # Unpack flat theta vector of length 20
+    r = theta[0]
+    sigma = theta[1]
+    alpha_pred = theta[2:8]
+    x_centre = theta[8:14]
+    y_centre = theta[14:20]
+
+    # Set fixed N (or include in theta[21] if sampling it)
+    N = 354.0
+
+    # Create parameter dictionary
+    params = {
+        'N': N,
+        'r': r,
+        'sigma': sigma,
+        'alpha_pred': alpha_pred,
+        'x_centre': x_centre,
+        'y_centre': y_centre,
+    }
+
+    # Seeded and substituted model
+    seeded_model = handlers.seed(isotropic_model, rng_seed=0)
+    sub_model = handlers.substitute(seeded_model, params)
+
+    # Trace to extract log-likelihood
+    trace = handlers.trace(sub_model).get_trace(sections_ids, hole_ids, x_obs=x_obs, y_obs=y_obs)
+    loglike = trace["obs"]["fn"].log_prob(trace["obs"]["value"]).sum()
+
+    return loglike
