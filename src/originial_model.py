@@ -73,27 +73,27 @@ def model(x, y, R, phis, xcent, ycent, phase):
     return rp, tp
 
 
-def log_likelihood_rt(params, data, N):
+def log_likelihood_rt(params, data):
     '''
     Compute log-likelihood for the radial-tangential Gaussian error model.
 
     Parameters:
-    params (list): Model parameters [R, sigma_r, sigma_t, phase1, phase2, ..., xcent1, xcent2, ..., ycent1, ycent2, ...]
+    params (list): Model parameters [N, R, sigma_r, sigma_t, phase1, phase2, ..., xcent1, xcent2, ..., ycent1, ycent2, ...]
     data (list of tuples): Measured hole positions for each fractured section.
-    N (int): Total number of holes in the original complete ring.
+    
 
     Returns:
     float: Log-likelihood value.
     '''
 
-    R, sigma_r, sigma_t = params[:3]
-    phases, xcents, ycents = np.split(params[3:], 3)
+    N, R, sigma_r, sigma_t = params[:4]
+    phases, xcents, ycents = np.split(params[4:], 3)
     #x,y = data
 
     invsig_r = 1./(2*(sigma_r*sigma_r))
     invsig_t = 1./(2*(sigma_t*sigma_t))
 
-    npoints = np.sum([len(dt) for dt in data])
+    npoints = np.sum([len(dt[0]) for dt in data])
     prefact = -npoints*np.log(2*np.pi*sigma_t*sigma_r)
     phis = 2*np.pi*np.arange(100)/N
 
@@ -112,28 +112,27 @@ def log_likelihood_rt(params, data, N):
 
     return prefact + exp_likelihood
 
-def log_likelihood_isotropic(params, data, N):
+def log_likelihood_isotropic(params, data):
     '''
     Compute log-likelihood for the isotropic Gaussian error model.
 
     Parameters:
-    params (list): Model parameters [R, sigma, phase1, phase2, ..., xcent1, xcent2, ..., ycent1, ycent2, ...]
+    params (list): Model parameters [N, R, sigma, phase1, phase2, ..., xcent1, xcent2, ..., ycent1, ycent2, ...]
     data (list of tuples): Measured hole positions for each fractured section.
-    N (int): Total number of holes in the original complete ring.
 
     Returns:
     float: Log-likelihood value.
     '''
     
     # Extract parameters
-    R, sigma = params[:2]  # Only one sigma for isotropic model
-    phases, xcents, ycents = np.split(params[2:], 3)
+    N, R, sigma = params[:3]  # Only one sigma for isotropic model
+    phases, xcents, ycents = np.split(params[3:], 3)
 
     # Compute inverse variance term
     invsig = 1./(2*sigma**2)
 
     # Compute number of points for normalization term
-    npoints = np.sum([len(dt) for dt in data])
+    npoints = np.sum([len(dt[0]) for dt in data])
     prefact = -npoints*np.log(2*np.pi*sigma**2)
 
     # Generate equally spaced angles for the full ring
@@ -158,9 +157,8 @@ def log_likelihood_isotropic(params, data, N):
 
 
 n_sec = 6 # number of sections
-n_dim = 3+3*n_sec
 
-# Define prior transform for 
+# Define prior transform for: 
 
 # Radial-Tangential Model
 
@@ -176,16 +174,17 @@ def prior_transform_rt(u):
         theta (np.ndarray): Transformed parameters in the model's physical space.
     """
     
-    ndim = n_dim
+    ndim = 22
     theta = np.zeros(ndim)
 
     # Global parameters
-    theta[0] = 65 + 20 * u[0]                    # R in [65, 85]
-    theta[1] = 10**(-3 + 3 * u[1])               # sigma_r in [1e-3, 1] (log-uniform)
-    theta[2] = 10**(-3 + 3 * u[2])               # sigma_t in [1e-3, 1] (log-uniform)
+    theta[0] = 340 + 40 * u[0]                   # N in [340, 380]
+    theta[1] = 65 + 20 * u[1]                    # R in [65, 85]
+    theta[2] = 10**(-3 + 3 * u[2])               # sigma_r in [1e-3, 1] (log-uniform)
+    theta[3] = 10**(-3 + 3 * u[3])               # sigma_t in [1e-3, 1] (log-uniform)
 
     # Section-wise parameters (phases, x-centres, y-centres)
-    start = 3
+    start = 4
     theta[start:start+n_sec] = -4 + 3 * u[start:start+n_sec]              # phase in [-4, -1]
     theta[start+n_sec:start+2*n_sec] = 70 + 20 * u[start+n_sec:start+2*n_sec]   # x_centre in [70, 90]
     theta[start+2*n_sec:start+3*n_sec] = 125 + 20 * u[start+2*n_sec:start+3*n_sec] # y_centre in [125, 145]
@@ -193,9 +192,6 @@ def prior_transform_rt(u):
     return theta
 
 # Isotropic Model
-
-n_sec = 6 # number of sections
-n_dim_iso = 2+3*n_sec
 
 def prior_transform_isotropic(u):
     """
@@ -208,15 +204,16 @@ def prior_transform_isotropic(u):
         theta (np.ndarray): Transformed parameters (20D)
     """
     
-    ndim = 2 + 3 * n_sec
+    ndim = 21
     theta = np.zeros(ndim)
 
     # Global parameters
-    theta[0] = 65 + 20 * u[0]           # R in [65, 85]
-    theta[1] = 10**(-3 + 3 * u[1])      # sigma in [1e-3, 1] (log-uniform)
+    theta[0] = 340 + 40 * u[0]                   # N in [340, 380]
+    theta[1] = 65 + 20 * u[1]           # R in [65, 85]
+    theta[2] = 10**(-3 + 3 * u[2])      # sigma in [1e-3, 1] (log-uniform)
 
     # Section-wise parameters
-    start = 2
+    start = 3
     theta[start:start+n_sec] = -4 + 3*u[start:start+n_sec]               # phase in [-4, -1]
     theta[start+n_sec:start+2*n_sec] = 70 + 20*u[start+n_sec:start+2*n_sec]     # x_centre
     theta[start+2*n_sec:start+3*n_sec] = 125 + 20*u[start+2*n_sec:start+3*n_sec] # y_centre
